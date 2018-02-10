@@ -1,0 +1,193 @@
+		     +--------------------------+
+       	       	     |		CS 140		|
+		     | PROJECT 2: USER PROGRAMS	|
+		     | 	   DESIGN DOCUMENT     	|
+		     +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+Amira Nabil Haiba <Maro.haiba@gmail.com>
+Bishoy Nader Fathy <programajor@gmail.com>
+Marc Magdi Kamel <mavloper@gmail.com>
+
+               ARGUMENT PASSING
+               ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+- No structs, global or static variables were added for the argument passing. 
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+- given a sentence separated by spaces : 
+--- Divide the sentence by spaces then push element by element from right to left to the stack
+--- Push word align
+--- Push a NULL address
+--- Push char * (array) that points to the arguments in stack from right to left 
+--- Push char ** to the last char * in stack
+--- Push number of arguments (argc)
+--- Push return address (zero)
+
+Avoiding overflow:
+Overflow takes place when stack pointer points to kernel memory or any reserved memory, when that happens exit is called.
+
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+- strtok_r() is reentrant and can be called from multiple threads simultaneously, or in nested loops. It takes an extra argument to store state between calls instead of using a global variable.
+- strtok() use global state, so if it is called from multiple threads, undefined behavior is invoked. Program could crash, or worse.
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+It's preferable to seperate arguments parsing from kernel, the kernel need only to do the important stuff. Allowing less of work to be done in kernel is more secure and preferred whenever possible.
+- Validaton from user side is more safely than running in kernel
+- No system calls are needed (reduce overhead) if passing bad arguments.
+
+                 SYSTEM CALLS
+                 ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+- struct lock file_system_lock : lock used to ensure mutual exclusion between system calls when dealing with a shared variable or file.
+
+We have added 2 new structs in thread.h file
+struct child_info // represents a child node for the parent thread
+{
+  tid_t tid;
+  int exit_status; // if not terminated by kernel
+  bool is_loaded;  // to indicate if child has returned from load function or not.
+  struct list_elem child_elem;
+};
+- struct file_descriptor : a struct that contains a pointer to file, int file id and list element .
+struct file_descriptor // represents the file descriptor of files opened by current thread
+{
+  int fid;
+  struct file* file;
+  // struct list_elem elem;
+  struct list_elem thread_elem;
+};
+We added these fields to struct thread
+    tid_t parent_id;                    /* parent thread id */
+    struct list children;               /* All children that haven't been waited for. */
+                                                /* (After a successful wait, child is removed from list) */
+    int exit_status;                     /* exit status of the thread (exit system call */
+    struct lock parent_waiting_lock;    /* lock for parent to wait for wait system call */
+    struct condition parent_waiting_condition;   /* condition for parent to wait for wait and execute system calls */
+    struct list files;                    /* list of file descriptors for all open files of this thread */
+    struct file* executing_file;   /* file to deny the write to while thread is executing and allow writing once the process exits */
+     int fid_generator;        /* value used to generate a new fd integer - initialized to 2 */
+    struct list files;                  /* List of opened files */
+    struct file* executing_file;        /* Pointer to the process file */
+    struct semaphore exec_sema;         /* Used to synchronize between child and parent threads */
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+-When a file is opened a list element containing a pointer to the file and the file descriptor is added to files list of the current thread .
+-per process
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+ - Read file descriptor from stack
+- case of read
+    -if fd equals 0 “ STDIN
+      - get characters from console (input_getc())
+   - else
+    - use file_read() function to read from a file if the fd is valid 
+- case of write
+    - if fd equals 1 STDOUT
+          - write to the console  (put_buf)
+    - else 
+         - uses file_write() function to write to a file if fd is valid
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+The least number of times it could be called is 1, if all bytes are on the same page, if they are distributed across pages byte by byte it can grow up to 4096 times.
+If it’s only two bytes then they will be at minimum 1 call and at maximum 2 calls.
+This can be improved if it allocate all data in one page.
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+- Wait uses a cond signal synchronization, at first it waits for its child to finish execution and exit. On the child exit it signals to the parent and set its exit code in the parent child info list so the parent can catch the exit code any time needed.
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+- We first check for a pointer that it’s not NULL. Then check that it’s not in a kernel space. Finally we check that it’s page is loaded into virtual memory. 
+- We free all of our resources inside process_exit which is always called (by exit system call which calls thread_exit() that calls process_exit or from page_fault() exception which also call thread_exit()).
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+- There is a semaphore (exec_sema) to ensure the order of execution we need.
+Exec_sema is initialized to zero. After the parent executes the child it calls sema_down which put it to sleep until the child process run and finish loading and signal to the parent process by a sema up after setting its status code. 
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+- To ensure synchronization we use conditional signal, the child signal after it finish execution whether it terminates normally or killed by the kernel.
+- When waiting, we have two cases:
+1- The child is alive
+-- in this case we have to wait until the child finish execution and receive the status code from the child.
+2- The child is dead
+-- In this case we need to get the saved exit status from kernel and remove it so if we wait again on same child we get (-1) from kernel.
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+- It’s the most simple way as mentioned by the helping document
+- It’s more straightforward and logical to do it this way.
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+Advantages:
+- Simplicity
+-  No need for synchronization between processes when referring to their file descriptors data because file descriptors are among processes not global
+Disadvantages:
+Accessing a file descriptor is O(n), where n is the number of file descriptors
+for the current thread (have to iterate through the entire fd list). Could be O
+(1) if they were stored in an array but this can waste some space.
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+We didn’t need to change it, as in out system we don’t have a multi threaded processes so we don’t need to distinguish between them it’s more simple to leave it this way.
+If we have a multi threading applications this will not be ideal. 
+
